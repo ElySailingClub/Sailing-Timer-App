@@ -20,7 +20,7 @@ except Exception:
     from PySide6.QtWidgets import QWidget as _WindowBase
 
 import data
-from boat_handicaps import get_handicap
+from boat_handicaps import get_handicap, display_name
 from timer import RaceTimer, format_time
 from serial_handler import SerialHandler
 from widgets import RacerPanel, TimerPanel, FinishPanel
@@ -141,6 +141,8 @@ class MainWindow(_WindowBase):
         self._racer_panel.participation_changed.connect(
             self._on_participation_changed)
         self._finish_panel.dnf_clicked.connect(lambda: self._store_time(dnf=True))
+        self._finish_panel.dns_clicked.connect(lambda: self._store_time(dns=True))
+        self._finish_panel.data_changed.connect(self._update_counts)
 
         self._serial.packet_received.connect(self._on_serial_packet)
         self._serial.connection_changed.connect(self._on_connection_changed)
@@ -222,9 +224,6 @@ class MainWindow(_WindowBase):
     def _start_timer(self):
         if self._timer.timing:
             return
-        if not self._participants:
-            self._show_warning("No racers selected.")
-            return
         rtype = self._timer_panel.race_type
         if rtype != "counter" and self._timer_panel.total_laps is None:
             self._show_warning("Please select a number of laps.")
@@ -266,9 +265,10 @@ class MainWindow(_WindowBase):
 
     def _on_participation_changed(self, participants: list[dict]):
         self._participants = participants
-        self._timer_panel.set_racer_count(len(participants))
         self._update_boats()
         self._finish_panel.set_participants(participants)
+        self._finish_panel.set_total_laps(self._timer_panel.total_laps)
+        self._update_counts()
 
     def _update_boats(self):
         seen = set()
@@ -280,25 +280,33 @@ class MainWindow(_WindowBase):
                 boats.append((h, r["boatClass"]))
         boats.sort(reverse=True)
         self._boats = boats
-        self._timer.reset(self._timer_panel.race_type, self._boats)
-        self._timer_panel.set_display(self._timer.display_text)
+        if not self._timer.timing:
+            self._timer.reset(self._timer_panel.race_type, self._boats)
+            self._timer_panel.set_display(self._timer.display_text)
 
     def _on_race_type_change(self, _rtype: str):
         if not self._timer.timing:
             self._reset_timer()
 
+    def _update_counts(self):
+        n_entries = len(self._participants)
+        n_finished = sum(
+            1 for e in self._finish_panel.entries if e["finishTime"] > 0
+        )
+        self._timer_panel.set_counts(n_entries, n_finished)
+
     # ════════════════════════════════════════════════════════════════════
     #  FINISH TIMES
     # ════════════════════════════════════════════════════════════════════
 
-    def _store_time(self, dnf=False):
+    def _store_time(self, dnf=False, dns=False):
         rtype = self._timer_panel.race_type
         if rtype == "pursuit":
             return
-        if not self._timer.timing:
-            self._show_warning("Timer has not started.")
-            return
-        if not dnf:
+        if not dnf and not dns:
+            if not self._timer.timing:
+                self._show_warning("Timer has not started.")
+                return
             race_ms = self._timer.race_elapsed_ms
             if race_ms <= 0:
                 self._show_warning("Race hasn't started yet (still in countdown).")
@@ -309,6 +317,13 @@ class MainWindow(_WindowBase):
                 "lapsCompleted": self._timer_panel.total_laps,
                 "racerid": None,
             }
+        elif dns:
+            entry = {
+                "id": self._time_id,
+                "finishTime": -2,
+                "lapsCompleted": None,
+                "racerid": None,
+            }
         else:
             entry = {
                 "id": self._time_id,
@@ -317,7 +332,9 @@ class MainWindow(_WindowBase):
                 "racerid": None,
             }
         self._time_id += 1
+        self._finish_panel.set_total_laps(self._timer_panel.total_laps)
         self._finish_panel.add_entry(entry)
+        self._update_counts()
 
     # ════════════════════════════════════════════════════════════════════
     #  RESULTS & EXPORT
@@ -330,7 +347,7 @@ class MainWindow(_WindowBase):
         for r in self._participants:
             row = dict(r)
             ft = next((e for e in entries if e.get("racerid") == r["id"]), None)
-            if ft and ft["finishTime"] != -1:
+            if ft and ft["finishTime"] > 0:
                 laps = ft.get("lapsCompleted") or total_laps
                 row["laps"] = laps
                 row["finishTimeStr"] = format_time(ft["finishTime"])
@@ -342,6 +359,11 @@ class MainWindow(_WindowBase):
                 else:
                     row["correctedMs"] = float("inf")
                     row["correctedStr"] = "N/A"
+            elif ft and ft["finishTime"] == -2:
+                row["laps"] = "DNS"
+                row["finishTimeStr"] = "DNS"
+                row["correctedMs"] = float("inf")
+                row["correctedStr"] = "DNS"
             else:
                 row["laps"] = "DNF"
                 row["finishTimeStr"] = "DNF"
@@ -375,8 +397,13 @@ class MainWindow(_WindowBase):
         if not path:
             return
         results = self._compute_results()
+        officer = self._timer_panel.officer
+        race_date = self._timer_panel.race_date
         with open(path, "w", newline="") as f:
             writer = csv.writer(f)
+            if officer or race_date:
+                writer.writerow([f"Race Officer: {officer}", f"Date: {race_date}"])
+                writer.writerow([])
             writer.writerow([
                 "Position", "Helm", "Crew", "Boat Class",
                 "Sail Number", "Laps", "Finish Time", "Corrected Time",
@@ -397,18 +424,30 @@ class MainWindow(_WindowBase):
 
     # ── HTML helpers ────────────────────────────────────────────────────
 
-    @staticmethod
-    def _results_html(results: list[dict]) -> str:
+    def _race_info_html(self) -> str:
+        officer = self._timer_panel.officer
+        race_date = self._timer_panel.race_date
+        parts = []
+        if officer:
+            parts.append(f"Race Officer: {officer}")
+        if race_date:
+            parts.append(f"Date: {race_date}")
+        if parts:
+            return f"<p style='text-align:center'>{' &nbsp;|&nbsp; '.join(parts)}</p>"
+        return ""
+
+    def _results_html(self, results: list[dict]) -> str:
         rows = ""
         for i, r in enumerate(results):
             rows += (
                 f"<tr><td>{i+1}</td><td>{r['helm']}</td><td>{r['crew']}</td>"
-                f"<td>{r['boatClass']}</td><td>{r['sailNo']}</td>"
+                f"<td>{display_name(r['boatClass'])}</td><td>{r['sailNo']}</td>"
                 f"<td>{r['laps']}</td><td>{r['finishTimeStr']}</td>"
                 f"<td>{r['correctedStr']}</td></tr>"
             )
         return (
             "<h2 style='text-align:center'>Race Results</h2>"
+            f"{self._race_info_html()}"
             "<table border='1' cellpadding='6' cellspacing='0'"
             " style='border-collapse:collapse;width:100%'>"
             "<tr><th>Pos</th><th>Helm</th><th>Crew</th><th>Boat</th>"
@@ -417,27 +456,50 @@ class MainWindow(_WindowBase):
         )
 
     def _starts_html(self) -> str:
-        boats = self._boats
-        boat_rows = ""
-        for i, (handicap, name) in enumerate(boats):
-            offset = (
-                0 if i == 0
-                else ((boats[0][0] - handicap) / boats[0][0]) * 2_700_000
+        rtype = self._timer_panel.race_type
+        total_laps = self._timer_panel.total_laps or 1
+        info = self._race_info_html()
+
+        if rtype == "pursuit":
+            boats = self._boats
+            boat_rows = ""
+            for i, (handicap, name) in enumerate(boats):
+                offset = (
+                    0 if i == 0
+                    else ((boats[0][0] - handicap) / boats[0][0]) * 2_700_000
+                )
+                boat_rows += f"<tr><td>{format_time(offset)}</td><td>{display_name(name)}</td></tr>"
+            racer_rows = "".join(
+                f"<tr><td>#{r['sailNo']} {r['helm']}</td><td></td></tr>"
+                for r in self._participants
             )
-            boat_rows += f"<tr><td>{format_time(offset)}</td><td>{name}</td></tr>"
-        racer_rows = "".join(
-            f"<tr><td>{r['helm']}</td><td></td></tr>" for r in self._participants
-        )
-        return (
-            "<h2 style='text-align:center'>Pursuit Start Times</h2>"
-            "<table border='1' cellpadding='6' cellspacing='0'"
-            " style='border-collapse:collapse;width:80%;margin:auto'>"
-            f"<tr><th>Start Time</th><th>Boat Class</th></tr>{boat_rows}</table>"
-            "<br>"
-            "<table border='1' cellpadding='6' cellspacing='0'"
-            " style='border-collapse:collapse;width:60%;margin:auto'>"
-            f"<tr><th>Racer</th><th>Place</th></tr>{racer_rows}</table>"
-        )
+            return (
+                f"<h2 style='text-align:center'>Pursuit Start Times</h2>{info}"
+                "<table border='1' cellpadding='6' cellspacing='0'"
+                " style='border-collapse:collapse;width:80%;margin:auto'>"
+                f"<tr><th>Start Time</th><th>Boat Class</th></tr>{boat_rows}</table>"
+                "<br>"
+                "<table border='1' cellpadding='6' cellspacing='0'"
+                " style='border-collapse:collapse;width:60%;margin:auto'>"
+                f"<tr><th>Racer</th><th>Place</th></tr>{racer_rows}</table>"
+            )
+        else:
+            lap_cols = "".join(f"<th>Lap {i+1}</th>" for i in range(total_laps))
+            rows = ""
+            for r in self._participants:
+                empty = "<td>&nbsp;</td>" * total_laps
+                rows += (
+                    f"<tr><td>{r['sailNo']}</td><td>{r['helm']}</td>"
+                    f"<td>{display_name(r['boatClass'])}</td>"
+                    f"{empty}<td>&nbsp;</td></tr>"
+                )
+            return (
+                f"<h2 style='text-align:center'>Starters List</h2>{info}"
+                "<table border='1' cellpadding='6' cellspacing='0'"
+                " style='border-collapse:collapse;width:100%'>"
+                f"<tr><th>Sail</th><th>Helm</th><th>Boat</th>{lap_cols}<th>Finish</th></tr>"
+                f"{rows}</table>"
+            )
 
     def _print_html(self, html: str):
         printer = QPrinter(QPrinter.HighResolution)

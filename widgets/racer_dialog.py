@@ -7,7 +7,7 @@ from qfluentwidgets import (
     LineEdit, ComboBox, PrimaryPushButton, PushButton, SubtitleLabel,
 )
 
-from boat_handicaps import boat_names
+from boat_handicaps import boat_names, display_name
 
 
 class RacerDialog(QDialog):
@@ -27,20 +27,23 @@ class RacerDialog(QDialog):
         self._helm = LineEdit()
         self._helm.setPlaceholderText("Helm name")
         self._crew = LineEdit()
-        self._crew.setPlaceholderText("Crew name (or 'none')")
+        self._crew.setPlaceholderText("Crew name (optional)")
         self._sail = LineEdit()
         self._sail.setPlaceholderText("Sail number")
         self._sail.setValidator(QIntValidator(0, 999999))
         self._boat = ComboBox()
-        self._boat.addItems(boat_names())
+        self._boat_classes = boat_names()
+        self._boat.addItems([display_name(n) for n in self._boat_classes])
 
         if racer:
             self._helm.setText(racer.get("helm", ""))
             self._crew.setText(racer.get("crew", ""))
             self._sail.setText(str(racer.get("sailNo", "")))
-            idx = self._boat.findText(racer.get("boatClass", ""))
-            if idx >= 0:
+            try:
+                idx = self._boat_classes.index(racer.get("boatClass", ""))
                 self._boat.setCurrentIndex(idx)
+            except ValueError:
+                pass
 
         form.addRow("Helm:", self._helm)
         form.addRow("Crew:", self._crew)
@@ -63,12 +66,10 @@ class RacerDialog(QDialog):
 
         ok = lambda s: all(c.isalpha() or c.isspace() for c in s)
 
-        if not helm or not crew:
-            QMessageBox.warning(self, "Error",
-                                "Helm and Crew cannot be empty.\n"
-                                "Use 'none' if no crew.")
+        if not helm:
+            QMessageBox.warning(self, "Error", "Helm cannot be empty.")
             return
-        if not ok(helm) or not ok(crew):
+        if not ok(helm) or (crew and not ok(crew)):
             QMessageBox.warning(self, "Error",
                                 "Helm and Crew must only contain letters.")
             return
@@ -83,5 +84,5 @@ class RacerDialog(QDialog):
             "helm":      self._helm.text().strip(),
             "crew":      self._crew.text().strip(),
             "sailNo":    self._sail.text().strip(),
-            "boatClass": self._boat.currentText(),
+            "boatClass": self._boat_classes[self._boat.currentIndex()],
         }

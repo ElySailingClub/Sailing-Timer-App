@@ -1,16 +1,44 @@
 """Left panel — racer list with search, CRUD, and participation checkboxes."""
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFontMetrics
 
 from qfluentwidgets import (
     SearchLineEdit, PushButton, PrimaryPushButton, CheckBox,
     CardWidget, BodyLabel, CaptionLabel, SubtitleLabel,
     SmoothScrollArea, FluentIcon as FIF, MessageBox,
+    TransparentToolButton,
 )
 
 import data
+from boat_handicaps import display_name
 from .racer_dialog import RacerDialog
+
+
+class _ElidedLabel(QLabel):
+    """A QLabel that elides text with '…' when it doesn't fit."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self._full_text = text
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setMinimumWidth(0)
+
+    def setText(self, text: str):
+        self._full_text = text
+        super().setText(text)
+        self._elide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self):
+        fm = QFontMetrics(self.font())
+        elided = fm.elidedText(self._full_text, Qt.ElideRight, self.width())
+        super().setText(elided)
+        self.setToolTip(self._full_text if elided != self._full_text else "")
 
 
 class RacerPanel(QWidget):
@@ -32,18 +60,23 @@ class RacerPanel(QWidget):
         layout.addWidget(title)
 
         self._search = SearchLineEdit()
-        self._search.setPlaceholderText("Search by helm name…")
+        self._search.setPlaceholderText("Search by name or sail number…")
         self._search.textChanged.connect(self._filter)
         layout.addWidget(self._search)
 
+        self._select_all = CheckBox("Select All")
+        self._select_all.toggled.connect(self._toggle_all)
+        layout.addWidget(self._select_all)
+
         self._scroll = SmoothScrollArea()
         self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         self._container = QWidget()
         self._container.setStyleSheet("QWidget { background: transparent; }")
         self._card_layout = QVBoxLayout(self._container)
         self._card_layout.setAlignment(Qt.AlignTop)
-        self._card_layout.setSpacing(6)
+        self._card_layout.setSpacing(4)
         self._scroll.setWidget(self._container)
         layout.addWidget(self._scroll, 1)
 
@@ -70,42 +103,52 @@ class RacerPanel(QWidget):
 
     def set_editable(self, enabled: bool):
         self._editable = enabled
-        self._add_btn.setEnabled(enabled)
-        self._search.setEnabled(enabled)
+        # Add button and search stay enabled to allow adding entries during race
 
     # ── Card builder ────────────────────────────────────────────────────
 
     def _make_card(self, racer: dict, index: int) -> CardWidget:
         card = CardWidget()
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(10, 6, 10, 6)
-        lay.setSpacing(2)
+        card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        lay = QHBoxLayout(card)
+        lay.setContentsMargins(8, 4, 8, 4)
+        lay.setSpacing(6)
 
-        top = QHBoxLayout()
         cb = CheckBox()
         cb.setChecked(racer["id"] in self._participating_ids)
         cb.toggled.connect(lambda checked, r=racer: self._toggle(r, checked))
-        top.addWidget(cb)
-        top.addWidget(BodyLabel(f"Helm: {racer['helm']}"))
-        top.addStretch()
-        lay.addLayout(top)
+        lay.addWidget(cb, 0, Qt.AlignVCenter)
 
-        if racer.get("crew") and racer["crew"] != "none":
-            lay.addWidget(CaptionLabel(f"  Crew: {racer['crew']}"))
-        lay.addWidget(CaptionLabel(f"  Boat: {racer['boatClass']}  |  Sail: {racer['sailNo']}"))
+        info = QVBoxLayout()
+        info.setSpacing(0)
+        info.setContentsMargins(0, 0, 0, 0)
 
-        btn_row = QHBoxLayout()
-        edit_btn = PushButton("Edit")
-        edit_btn.setFixedHeight(28)
+        name_label = _ElidedLabel(f"#{racer['sailNo']}  {racer['helm']}")
+        name_label.setStyleSheet(BodyLabel().styleSheet())
+        info.addWidget(name_label)
+
+        detail = display_name(racer['boatClass'])
+        crew = racer.get("crew", "")
+        if crew and crew.lower() != "none":
+            detail += f"  ·  Crew: {crew}"
+        detail_label = _ElidedLabel(detail)
+        detail_label.setStyleSheet(CaptionLabel().styleSheet())
+        info.addWidget(detail_label)
+        lay.addLayout(info, 1)
+
+        edit_btn = TransparentToolButton(FIF.EDIT)
+        edit_btn.setFixedSize(30, 30)
+        edit_btn.setEnabled(self._editable)
         edit_btn.clicked.connect(lambda _, idx=index: self._edit_racer(idx))
-        del_btn = PushButton("Delete")
-        del_btn.setFixedHeight(28)
-        del_btn.clicked.connect(lambda _, idx=index: self._delete_racer(idx))
-        btn_row.addWidget(edit_btn)
-        btn_row.addWidget(del_btn)
-        lay.addLayout(btn_row)
+        lay.addWidget(edit_btn, 0, Qt.AlignVCenter)
 
-        card._helm_name = racer["helm"].upper()
+        del_btn = TransparentToolButton(FIF.DELETE)
+        del_btn.setFixedSize(30, 30)
+        del_btn.setEnabled(self._editable)
+        del_btn.clicked.connect(lambda _, idx=index: self._delete_racer(idx))
+        lay.addWidget(del_btn, 0, Qt.AlignVCenter)
+
+        card._search_text = f"{racer['helm'].upper()} {racer['sailNo']}"
         return card
 
     # ── Actions ─────────────────────────────────────────────────────────
@@ -123,9 +166,19 @@ class RacerPanel(QWidget):
             ]
         self.participation_changed.emit(self._participating)
 
+    def _toggle_all(self, checked: bool):
+        if checked:
+            for racer in self._racers:
+                if racer["id"] not in self._participating_ids:
+                    self._participating_ids.add(racer["id"])
+                    self._participating.append(racer)
+        else:
+            self._participating_ids.clear()
+            self._participating.clear()
+        self.participation_changed.emit(self._participating)
+        self.refresh()
+
     def _add_racer(self):
-        if not self._editable:
-            return
         dlg = RacerDialog(self.window())
         if dlg.exec() == RacerDialog.Accepted:
             info = dlg.get_data()
@@ -164,4 +217,4 @@ class RacerPanel(QWidget):
         for i in range(self._card_layout.count()):
             w = self._card_layout.itemAt(i).widget()
             if w:
-                w.setVisible(text in getattr(w, "_helm_name", ""))
+                w.setVisible(text in getattr(w, "_search_text", ""))

@@ -26,9 +26,22 @@ HANDICAPS: dict[str, int] = {
 }
 
 
+ILCA_ALIASES: dict[str, str] = {
+    "ILCA7": "Laser",
+    "ILCA6": "Laser Radial",
+    "ILCA4": "Laser 4.7",
+}
+
+
 def get_handicap(boat_class: str) -> int | None:
     return HANDICAPS.get(boat_class)
 
 
 def boat_names() -> list[str]:
     return list(HANDICAPS.keys())
+
+
+def display_name(boat_class: str) -> str:
+    """Return class name with legacy alias, e.g. 'ILCA7 (Laser)'."""
+    alias = ILCA_ALIASES.get(boat_class)
+    return f"{boat_class} ({alias})" if alias else boat_class

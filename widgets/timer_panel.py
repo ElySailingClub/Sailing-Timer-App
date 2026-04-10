@@ -1,10 +1,12 @@
 """Centre panel — timer display, race controls, and action buttons."""
 
+from datetime import date
+
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from PySide6.QtCore import Qt, Signal
 
 from qfluentwidgets import (
-    PushButton, PrimaryPushButton, ComboBox,
+    PushButton, PrimaryPushButton, ComboBox, LineEdit,
     BodyLabel, SubtitleLabel,
 )
 
@@ -24,6 +26,23 @@ class TimerPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 0, 10, 0)
 
+        # ── Race info row ───────────────────────────────────────────────
+        info_row = QHBoxLayout()
+        info_row.addWidget(BodyLabel("Race Officer:"))
+        self._officer = LineEdit()
+        self._officer.setPlaceholderText("Name")
+        self._officer.setMinimumWidth(100)
+        info_row.addWidget(self._officer)
+
+        info_row.addWidget(BodyLabel("Date:"))
+        self._date = LineEdit()
+        self._date.setPlaceholderText("DD/MM/YYYY")
+        self._date.setText(date.today().strftime("%d/%m/%Y"))
+        self._date.setMinimumWidth(90)
+        info_row.addWidget(self._date)
+        info_row.addStretch()
+        layout.addLayout(info_row)
+
         # ── Controls row ────────────────────────────────────────────────
         ctrl = QHBoxLayout()
 
@@ -40,8 +59,8 @@ class TimerPanel(QWidget):
         self._laps.addItems(["—"] + [str(i) for i in range(1, 9)])
         ctrl.addWidget(self._laps)
 
-        self._racer_count = BodyLabel("Racers: 0")
-        ctrl.addWidget(self._racer_count)
+        self._counts_label = BodyLabel("Entries: 0 | Finished: 0")
+        ctrl.addWidget(self._counts_label)
         ctrl.addStretch()
         layout.addLayout(ctrl)
 
@@ -91,7 +110,7 @@ class TimerPanel(QWidget):
         self._print_results_btn.clicked.connect(self.print_results_clicked.emit)
         er.addWidget(self._print_results_btn)
 
-        self._print_starts_btn = PushButton("Print Start Times")
+        self._print_starts_btn = PushButton("Print Starters List")
         self._print_starts_btn.clicked.connect(self.print_starts_clicked.emit)
         er.addWidget(self._print_starts_btn)
 
@@ -115,11 +134,22 @@ class TimerPanel(QWidget):
         idx = self._laps.currentIndex()
         return idx if idx >= 1 else None
 
+    @property
+    def officer(self) -> str:
+        return self._officer.text().strip()
+
+    @property
+    def race_date(self) -> str:
+        return self._date.text().strip()
+
     def set_display(self, text: str):
         self._display.setText(text)
 
     def set_racer_count(self, n: int):
-        self._racer_count.setText(f"Racers: {n}")
+        self._counts_label.setText(f"Entries: {n} | Finished: 0")
+
+    def set_counts(self, entries: int, finished: int):
+        self._counts_label.setText(f"Entries: {entries} | Finished: {finished}")
 
     def set_controls_enabled(self, enabled: bool):
         self._race_type.setEnabled(enabled)
@@ -127,7 +157,7 @@ class TimerPanel(QWidget):
     def show_end_buttons(self, race_type: str):
         self._end_row.show()
         self._print_results_btn.setVisible(race_type == "handicap")
-        self._print_starts_btn.setVisible(race_type == "pursuit")
+        self._print_starts_btn.setVisible(True)
         self._export_btn.setVisible(race_type == "handicap")
 
     def hide_end_buttons(self):
