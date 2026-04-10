@@ -1,0 +1,19 @@
+{
+  "next_id": 3,
+  "racers": [
+    {
+      "helm": "sdvcdfvsdf",
+      "crew": "sdfsdfdfsdf asdasd",
+      "sailNo": "121212",
+      "boatClass": "BritishMoth",
+      "id": 1
+    },
+    {
+      "helm": "dasdsad",
+      "crew": "addasdasda",
+      "sailNo": "123321",
+      "boatClass": "BritishMoth",
+      "id": 2
+    }
+  ]
+}
