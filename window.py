@@ -23,7 +23,7 @@ import data
 from boat_handicaps import get_handicap, display_name
 from timer import RaceTimer, format_time
 from serial_handler import SerialHandler
-from widgets import RacerPanel, TimerPanel, FinishPanel
+from widgets import RacerPanel, TimerPanel, FinishPanel, LapPanel
 
 
 class MainWindow(_WindowBase):
@@ -60,6 +60,9 @@ class MainWindow(_WindowBase):
         self._participants: list[dict] = []
         self._boats: list[tuple[int, str]] = []
         self._time_id = 1
+
+        # ── Binding state ───────────────────────────────────────────────
+        self._binding_state = "pre-start"
 
         # ── Timer & serial ──────────────────────────────────────────────
         self._timer = RaceTimer(self)
@@ -117,10 +120,18 @@ class MainWindow(_WindowBase):
         self._racer_panel = RacerPanel(self._data, self)
         self._timer_panel = TimerPanel(self)
         self._finish_panel = FinishPanel(self)
+        self._lap_panel = LapPanel(self)
+
+        right_col = QVBoxLayout()
+        right_col.setSpacing(10)
+        right_col.addWidget(self._finish_panel, 2)
+        right_col.addWidget(self._lap_panel, 1)
+        right_wrap = QWidget()
+        right_wrap.setLayout(right_col)
 
         columns.addWidget(self._racer_panel, 1)
         columns.addWidget(self._timer_panel, 2)
-        columns.addWidget(self._finish_panel, 1)
+        columns.addWidget(right_wrap, 1)
         root_layout.addLayout(columns)
 
     # ════════════════════════════════════════════════════════════════════
@@ -174,6 +185,7 @@ class MainWindow(_WindowBase):
             self._conn_label.setText("Connected")
             self._conn_label.setStyleSheet("color: #0F7B0F; font-weight: bold;")
             self._connect_btn.setText("Disconnect")
+            QTimer.singleShot(200, self._send_bindings)
         else:
             self._conn_label.setText("Disconnected")
             self._conn_label.setStyleSheet("color: #C42B1C; font-weight: bold;")
@@ -182,21 +194,112 @@ class MainWindow(_WindowBase):
     def _on_serial_packet(self, packet: dict):
         ptype = packet.get("packet-type")
         if ptype == "button-input":
-            btn = packet.get("button")
-            if btn == "store":
-                self._serial.send_sound("beep")
-                self._store_time()
-            elif btn == "recall":
-                self._serial.send_sound("horn")
-            elif btn == "shortened":
-                self._serial.send_sound("shortened")
+            print(f"[RaceBox BTN] raw='{packet.get('button')}' state={self._binding_state}")
+            self._handle_button_input(packet.get("button"))
         elif ptype == "log":
             level = packet.get("type", "info")
             msg = packet.get("message", "")
             print(f"[RaceBox {level.upper()}] {msg}")
+        else:
+            print(f"[RaceBox PKT] {packet}")
+
+    _BUTTON_ALIASES = {
+        "button1": "button1", "1": "button1", "btn1": "button1", "b1": "button1",
+        "button2": "button2", "2": "button2", "btn2": "button2", "b2": "button2",
+        "button3": "button3", "3": "button3", "btn3": "button3", "b3": "button3",
+        # legacy names
+        "store": "button2", "recall": "button2", "shortened": "button3",
+    }
+
+    def _handle_button_input(self, btn):
+        if btn is None:
+            return
+        key = self._BUTTON_ALIASES.get(str(btn).strip().lower())
+        if key is None:
+            print(f"[RaceBox BTN] unknown button '{btn}'")
+            return
+        state = self._binding_state
+        if state == "pre-start":
+            if key == "button1":
+                self._start_timer()
+        elif state == "after-start":
+            if key == "button2":
+                self._individual_recall()
+            elif key == "button3":
+                self._general_recall()
+        elif state == "after-20s":
+            if key == "button1":
+                self._record_lap()
+            elif key == "button2":
+                self._serial.send_sound("beep")
+                self._store_time()
+            elif key == "button3":
+                self._shorten_course()
 
     def _send_horn(self):
         self._serial.send_sound("horn")
+
+    def _send_two_horns(self):
+        self._serial.send_sound("horn")
+        QTimer.singleShot(800, lambda: self._serial.send_sound("horn"))
+
+    # ── Binding state ───────────────────────────────────────────────────
+
+    _BINDING_LABELS = {
+        "pre-start": {
+            "button1": "Start Timer",
+            "button2": "",
+            "button3": "",
+        },
+        "after-start": {
+            "button1": "",
+            "button2": "Individual Recall",
+            "button3": "General Recall",
+        },
+        "after-20s": {
+            "button1": "Record Lap",
+            "button2": "Record Finish",
+            "button3": "Shorten Course",
+        },
+    }
+
+    def _set_binding_state(self, state: str):
+        if state == self._binding_state:
+            return
+        self._binding_state = state
+        self._send_bindings()
+
+    def _send_bindings(self):
+        labels = self._BINDING_LABELS.get(self._binding_state, {})
+        self._serial.send_packet({
+            "packet-type": "update-bindings",
+            "binings": {
+                "button1": labels.get("button1", ""),
+                "button2": labels.get("button2", ""),
+                "button3": labels.get("button3", ""),
+            },
+        })
+
+    # ── Race-control actions ────────────────────────────────────────────
+
+    def _individual_recall(self):
+        self._serial.send_sound("horn")
+
+    def _general_recall(self):
+        self._send_two_horns()
+        self._reset_timer()
+
+    def _shorten_course(self):
+        self._send_two_horns()
+
+    def _record_lap(self):
+        if not self._timer.timing:
+            return
+        race_ms = self._timer.race_elapsed_ms
+        if race_ms <= 0:
+            return
+        self._serial.send_sound("beep")
+        self._lap_panel.add_lap(race_ms)
 
     # ════════════════════════════════════════════════════════════════════
     #  TIMER
@@ -208,10 +311,12 @@ class MainWindow(_WindowBase):
         self._timer_panel.set_display(self._timer.display_text)
         self._timer_panel.hide_end_buttons()
         self._finish_panel.clear()
+        self._lap_panel.clear()
         self._time_id = 1
         self._racer_panel.set_editable(True)
         self._timer_panel.set_controls_enabled(True)
         self._timer_panel.set_timer_running(False)
+        self._set_binding_state("pre-start")
 
     def _reset_confirm(self):
         if self._timer.timing:
@@ -232,6 +337,7 @@ class MainWindow(_WindowBase):
         self._racer_panel.set_editable(False)
         self._timer_panel.set_controls_enabled(False)
         self._timer_panel.set_timer_running(True)
+        self._set_binding_state("after-start")
 
     def _stop_timer(self):
         if not self._timer.timing:
@@ -247,17 +353,22 @@ class MainWindow(_WindowBase):
         self._timer_panel.set_controls_enabled(True)
         self._timer_panel.set_timer_running(False)
         self._timer_panel.show_end_buttons(self._timer_panel.race_type)
+        self._set_binding_state("pre-start")
 
     def _on_auto_stop(self):
         self._timer_panel.set_display(self._timer.display_text)
         self._timer_panel.set_controls_enabled(True)
         self._timer_panel.set_timer_running(False)
         self._timer_panel.show_end_buttons("pursuit")
+        self._set_binding_state("pre-start")
 
     def _tick(self):
         triggered = self._timer.tick()
         if self._timer.timing:
             self._timer_panel.set_display(self._timer.display_text)
+            if (self._binding_state == "after-start"
+                    and self._timer.race_elapsed_ms >= 20_000):
+                self._set_binding_state("after-20s")
 
     # ════════════════════════════════════════════════════════════════════
     #  PARTICIPATION
