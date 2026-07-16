@@ -10,7 +10,7 @@ Supported incoming packets:
 
 Supported outgoing packets:
   {"packet-type": "keep-alive-response"}
-  {"packet-type": "sound", "sound": "horn"|"beep"|"shortened"}
+  {"packet-type": "output", "sound": "horn"|"bell"|"shortened"}
 """
 
 import json
@@ -74,13 +74,13 @@ class SerialHandler(QThread):
         if self._ser and self._ser.is_open:
             try:
                 msg = json.dumps(data) + "\n"
-                self._ser.write(msg.encode("utf-8"))
+                self._ser.write(msg.encode("ascii"))
             except serial.SerialException:
                 pass
 
     def send_sound(self, sound_type):
-        """Send a sound command: 'horn', 'beep', or 'shortened'."""
-        self.send_packet({"packet-type": "sound", "sound": sound_type})
+        """Send a sound command: 'horn', 'bell', or 'shortened'."""
+        self.send_packet({"packet-type": "output", "sound": sound_type})
 
     @staticmethod
     def available_ports():

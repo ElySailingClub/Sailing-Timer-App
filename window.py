@@ -231,17 +231,17 @@ class MainWindow(_WindowBase):
             if key == "button1":
                 self._record_lap()
             elif key == "button2":
-                self._serial.send_sound("beep")
+                self._serial.send_sound("bell")
                 self._store_time()
             elif key == "button3":
                 self._shorten_course()
 
     def _send_horn(self):
-        self._serial.send_sound("horn")
+        self._serial.send_sound("hooter")
 
     def _send_two_horns(self):
-        self._serial.send_sound("horn")
-        QTimer.singleShot(800, lambda: self._serial.send_sound("horn"))
+        self._serial.send_sound("hooter")
+        QTimer.singleShot(800, lambda: self._serial.send_sound("hooter"))
 
     # ── Binding state ───────────────────────────────────────────────────
 
@@ -283,7 +283,7 @@ class MainWindow(_WindowBase):
     # ── Race-control actions ────────────────────────────────────────────
 
     def _individual_recall(self):
-        self._serial.send_sound("horn")
+        self._serial.send_sound("hooter")
 
     def _general_recall(self):
         self._send_two_horns()
@@ -298,7 +298,7 @@ class MainWindow(_WindowBase):
         race_ms = self._timer.race_elapsed_ms
         if race_ms <= 0:
             return
-        self._serial.send_sound("beep")
+        self._serial.send_sound("bell")
         self._lap_panel.add_lap(race_ms)
 
     # ════════════════════════════════════════════════════════════════════

@@ -98,11 +98,12 @@ class RaceTimer(QObject):
 
     def _build_alerts(self, boats: list[tuple[int, str]]):
         if self._race_type in ("handicap", "pursuit"):
+            # Added hacky fix by increcing these by 1
             self._alerts = [
-                [300_000, False],   # 5:00 horn
-                [240_000, False],   # 4:00 horn
-                [60_000,  False],   # 1:00 horn
-                [0,       False],   # GO   horn
+                [301_000, False],   # 5:00 horn
+                [241_000, False],   # 4:00 horn
+                [61_000,  False],   # 1:00 horn
+                [1_000,       False],   # GO   horn
             ]
         else:
             self._alerts = [[0, False]]
